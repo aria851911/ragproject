@@ -16,13 +16,13 @@ from sentence_transformers import SentenceTransformer
 # Config
 # =========================================================
 
-CURRENT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CURRENT_DIR
-OUT_DIR = CURRENT_DIR / "out"
+BASE_DIR = Path(__file__).resolve().parent
+OUT_DIR = BASE_DIR / "out"
 
 ENV_CANDIDATES = [
-    CURRENT_DIR / ".env",
-    CURRENT_DIR.parent / ".env",
+    BASE_DIR / ".env",
+    BASE_DIR.parent / ".env",
+    Path.cwd() / ".env",
 ]
 
 ROUTER_MODEL = "gpt-4o-mini"
@@ -35,8 +35,8 @@ STRATEGY_MODEL = "gpt-4o-mini"
 
 EMB_MODEL = "intfloat/multilingual-e5-small"
 
-FAISS_FILE = OUT_DIR / "base_persona.faiss"
-CHUNKS_FILE = OUT_DIR / "chunks.json"
+FAISS_FILE = OUT_DIR / "index.faiss"
+META_FILE = OUT_DIR / "metadata.json"
 
 TOP_K_RAG = 5
 
@@ -784,17 +784,68 @@ def normalize_l1_output(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"key_profiles": key_profiles, "ignored_others": clean_ignored}
 
 
-def get_chunk_text(chunk: Dict[str, Any]) -> str:
-    if "text" in chunk and chunk["text"]:
-        return str(chunk["text"])
-    if "content" in chunk and chunk["content"]:
-        return str(chunk["content"])
-    return ""
+def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
+    if isinstance(chunk, dict):
+        source_file = str(
+            chunk.get("source_file")
+            or chunk.get("file")
+            or chunk.get("filename")
+            or chunk.get("persona")
+            or "unknown"
+        ).strip()
+
+        h2_title = str(
+            chunk.get("h2_title")
+            or chunk.get("title")
+            or chunk.get("section")
+            or chunk.get("topic")
+            or ""
+        ).strip()
+
+        text_value = (
+            chunk.get("text")
+            or chunk.get("content")
+            or chunk.get("chunk")
+            or chunk.get("chunk_text")
+            or chunk.get("body")
+            or ""
+        )
+        text_str = str(text_value).strip()
+
+        return {
+            "id": chunk.get("id", f"chunk_{idx}" if idx >= 0 else "chunk"),
+            "source_file": source_file,
+            "h2_title": h2_title,
+            "text": text_str,
+            "raw": chunk,
+        }
+
+    if isinstance(chunk, str):
+        return {
+            "id": f"chunk_{idx}" if idx >= 0 else "chunk",
+            "source_file": "unknown",
+            "h2_title": "",
+            "text": chunk.strip(),
+            "raw": chunk,
+        }
+
+    return {
+        "id": f"chunk_{idx}" if idx >= 0 else "chunk",
+        "source_file": "unknown",
+        "h2_title": "",
+        "text": str(chunk).strip(),
+        "raw": chunk,
+    }
 
 
-def get_chunk_title(chunk: Dict[str, Any]) -> str:
-    source_file = str(chunk.get("source_file", "unknown"))
-    h2_title = str(chunk.get("h2_title", ""))
+def get_chunk_text(chunk: Any) -> str:
+    return normalize_chunk(chunk).get("text", "")
+
+
+def get_chunk_title(chunk: Any) -> str:
+    c = normalize_chunk(chunk)
+    source_file = c.get("source_file", "unknown")
+    h2_title = c.get("h2_title", "")
     if h2_title:
         return f"{source_file} | {h2_title}"
     return source_file
@@ -805,12 +856,35 @@ def get_chunk_title(chunk: Dict[str, Any]) -> str:
 # =========================================================
 
 def load_index_and_chunks():
-    if not FAISS_FILE.exists() or not CHUNKS_FILE.exists():
-        raise FileNotFoundError(f"找不到 RAG 檔案：\n{FAISS_FILE}\n{CHUNKS_FILE}")
-    index = faiss.read_index(str(FAISS_FILE))
-    chunks = json.loads(CHUNKS_FILE.read_text(encoding="utf-8"))
-    return index, chunks
+    if not FAISS_FILE.exists() or not META_FILE.exists():
+        raise FileNotFoundError(
+            f"找不到 RAG 檔案：\n{FAISS_FILE}\n{META_FILE}"
+        )
 
+    index = faiss.read_index(str(FAISS_FILE))
+
+    with open(META_FILE, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    if not isinstance(metadata, list):
+        raise ValueError("metadata.json 格式錯誤：必須是 list")
+
+    chunks = []
+    for i, item in enumerate(metadata):
+        chunks.append({
+            "id": item.get("id", f"chunk_{i}"),
+            "source_file": str(item.get("source", "")).strip(),
+            "h2_title": str(item.get("section_title", "")).strip(),
+            "text": str(item.get("text", "")).strip(),
+            "raw": item,
+        })
+
+    if index.ntotal != len(chunks):
+        raise ValueError(
+            f"FAISS 向量數量 ({index.ntotal}) 與 metadata 數量 ({len(chunks)}) 不一致，請重新 build_index.py"
+        )
+
+    return index, chunks
 
 def retrieve_rag_context(
     query_text: str,
@@ -818,7 +892,8 @@ def retrieve_rag_context(
     index,
     chunks,
     emb_model,
-    top_k: int = TOP_K_RAG
+    top_k: int = TOP_K_RAG,
+    target_persona: str = ""
 ) -> List[Dict[str, Any]]:
     persona_hint_parts = []
     for p in persona_summaries:
@@ -827,7 +902,7 @@ def retrieve_rag_context(
         )
 
     retrieval_query = (
-        f"人際衝突 溝通 協調 建議 做法 問題解決 {query_text} "
+        f"人際衝突 溝通 協調 建議 做法 行銷文案 廣告 CTA 策略 受眾 {query_text} "
         + " ".join(persona_hint_parts)
     )
 
@@ -836,21 +911,31 @@ def retrieve_rag_context(
         normalize_embeddings=True
     ).astype("float32")
 
-    D, I = index.search(q_emb, top_k)
+    D, I = index.search(q_emb, max(top_k * 3, top_k))
 
     results = []
     for rank, idx in enumerate(I[0], start=1):
         if idx < 0 or idx >= len(chunks):
             continue
+
         c = chunks[idx]
+
+        if target_persona:
+            source_file = str(c.get("source_file", "")).lower()
+            if target_persona.lower() not in source_file:
+                continue
+
         results.append({
-            "rank": rank,
+            "rank": len(results) + 1,
             "score": float(D[0][rank - 1]),
             "source": get_chunk_title(c),
             "text": get_chunk_text(c),
         })
-    return results
 
+        if len(results) >= top_k:
+            break
+
+    return results
 
 def build_rag_text(retrieved: List[Dict[str, Any]]) -> str:
     if not retrieved:
@@ -1123,7 +1208,7 @@ def run_l5_general(client: OpenAI, user_input: str, rag_text: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
-def run_l5_marketing(client: OpenAI, parsed: Dict[str, Any]) -> str:
+def run_l5_marketing(client: OpenAI, parsed: Dict[str, Any], rag_text: str = "") -> str:
     persona = parsed.get("persona", "general")
     persona_style = PERSONA_MARKETING_MAP.get(persona, PERSONA_MARKETING_MAP["general"])
 
@@ -1135,12 +1220,20 @@ def run_l5_marketing(client: OpenAI, parsed: Dict[str, Any]) -> str:
         tone=parsed.get("tone", "normal"),
     )
 
+    full_prompt = f"""
+{user_prompt}
+
+--------------------------------
+參考資料（RAG）：
+{rag_text}
+""".strip()
+
     resp = client.chat.completions.create(
         model=MARKETING_MODEL,
         temperature=0.7,
         messages=[
             {"role": "system", "content": "你是頂級行銷文案專家。"},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": full_prompt},
         ],
     )
     return resp.choices[0].message.content.strip()
@@ -1260,18 +1353,47 @@ def run_interpersonal_pipeline(client: OpenAI, emb_model, index, chunks, user_in
     return result
 
 
-def run_marketing_pipeline(client: OpenAI, user_input: str) -> Dict[str, Any]:
+def run_marketing_pipeline(client: OpenAI, emb_model, index, chunks, user_input: str) -> Dict[str, Any]:
     result = {
         "mode": "marketing_copy",
         "input": user_input,
         "parsed_marketing": None,
+        "rag": [],
         "l5_answer": None,
     }
 
     parsed = parse_marketing_input(client, user_input)
     result["parsed_marketing"] = parsed
 
-    answer = run_l5_marketing(client, parsed)
+    persona = parsed.get("persona", "general")
+    product = parsed.get("product", "")
+    copy_type = parsed.get("copy_type", "")
+    tone = parsed.get("tone", "")
+
+    persona_summaries = []
+    if persona != "general":
+        persona_summaries.append({
+            "name": "target_audience",
+            "persona": persona,
+            "motive": f"偏好{persona}型的語言與訴求",
+            "pain_point": f"不符合{persona}型偏好的文案風格",
+        })
+
+    retrieval_query = f"{product} {copy_type} {tone} {persona}"
+
+    rag_results = retrieve_rag_context(
+        query_text=retrieval_query,
+        persona_summaries=persona_summaries,
+        index=index,
+        chunks=chunks,
+        emb_model=emb_model,
+        top_k=TOP_K_RAG,
+        target_persona=persona if persona != "general" else ""
+    )
+    result["rag"] = rag_results
+    rag_text = build_rag_text(rag_results)
+
+    answer = run_l5_marketing(client, parsed, rag_text)
     result["l5_answer"] = answer
     return result
 
@@ -1309,7 +1431,8 @@ def run_strategy_pipeline(client: OpenAI, emb_model, index, chunks, user_input: 
         index=index,
         chunks=chunks,
         emb_model=emb_model,
-        top_k=TOP_K_RAG
+        top_k=TOP_K_RAG,
+        target_persona=persona if persona != "general" else ""
     )
     result["rag"] = rag_results
     rag_text = build_rag_text(rag_results)
@@ -1326,7 +1449,7 @@ def process_query(client: OpenAI, emb_model, index, chunks, user_input: str) -> 
         return run_interpersonal_pipeline(client, emb_model, index, chunks, user_input)
 
     if task == "marketing_copy":
-        return run_marketing_pipeline(client, user_input)
+        return run_marketing_pipeline(client, emb_model, index, chunks, user_input)
 
     if task == "strategy_advice":
         return run_strategy_pipeline(client, emb_model, index, chunks, user_input)
@@ -1401,6 +1524,14 @@ def print_debug(result: Dict[str, Any]) -> None:
     if result["mode"] == "marketing_copy":
         print("\n--- MARKETING PARSER ---")
         print(json.dumps(result["parsed_marketing"], ensure_ascii=False, indent=2))
+
+        print("\n--- RAG RETRIEVAL ---")
+        if not result.get("rag"):
+            print("(none)")
+        else:
+            for r in result["rag"]:
+                print(f"[{r['rank']}] {r['source']} | score={r['score']:.4f}")
+
         print("\n--- L5 ANSWER ---")
         print(result["l5_answer"])
         return
