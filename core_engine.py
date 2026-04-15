@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 
 from app_rag_prod import (
     EMB_MODEL,
-    load_index_and_chunks,
+    load_all_indexes,
     process_query,
 )
 
@@ -46,16 +46,16 @@ def get_api_key() -> str:
 # 初始化（只跑一次）
 # =========================================================
 
-def init_system() -> Tuple[OpenAI, SentenceTransformer, Any, Any]:
+def init_system() -> Tuple[OpenAI, SentenceTransformer, Any]:
     load_env_file()
 
     api_key = get_api_key()
     client = OpenAI(api_key=api_key)
 
     emb_model = SentenceTransformer(EMB_MODEL)
-    index, chunks = load_index_and_chunks()
+    rag_stores = load_all_indexes()
 
-    return client, emb_model, index, chunks
+    return client, emb_model, rag_stores
 
 
 # =========================================================
@@ -66,8 +66,7 @@ def chat_once(
     user_input: str,
     client: OpenAI,
     emb_model: SentenceTransformer,
-    index: Any,
-    chunks: Any,
+    rag_stores: Any,
 ) -> Dict[str, Any]:
     if not isinstance(user_input, str) or not user_input.strip():
         return {
@@ -79,8 +78,7 @@ def chat_once(
     result = process_query(
         client=client,
         emb_model=emb_model,
-        index=index,
-        chunks=chunks,
+        rag_stores=rag_stores,
         user_input=user_input.strip(),
     )
 

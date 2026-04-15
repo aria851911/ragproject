@@ -22,7 +22,7 @@ def load_system():
     return init_system()
 
 
-client, emb_model, index, chunks = load_system()
+client, emb_model, rag_stores = load_system()
 
 
 # =========================================================
@@ -84,8 +84,7 @@ if user_input and user_input.strip():
                     user_input=text,
                     client=client,
                     emb_model=emb_model,
-                    index=index,
-                    chunks=chunks,
+                    rag_stores=rag_stores,
                 )
 
                 answer = result.get("answer", "")
