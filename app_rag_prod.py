@@ -35,9 +35,6 @@ STRATEGY_MODEL = "gpt-4o-mini"
 
 EMB_MODEL = "intfloat/multilingual-e5-small"
 
-FAISS_FILE = OUT_DIR / "index.faiss"
-META_FILE = OUT_DIR / "metadata.json"
-
 TOP_K_RAG = 5
 
 CN_MAP = {
@@ -47,6 +44,33 @@ CN_MAP = {
     "octopus": "章魚",
     "penguin": "企鵝",
     "none": "none",
+}
+
+INDEX_META_MAP = {
+    "all": {
+        "faiss": OUT_DIR / "index_all.faiss",
+        "meta": OUT_DIR / "metadata_all.json",
+    },
+    "bee": {
+        "faiss": OUT_DIR / "index_bee.faiss",
+        "meta": OUT_DIR / "metadata_bee.json",
+    },
+    "tiger": {
+        "faiss": OUT_DIR / "index_tiger.faiss",
+        "meta": OUT_DIR / "metadata_tiger.json",
+    },
+    "dolphin": {
+        "faiss": OUT_DIR / "index_dolphin.faiss",
+        "meta": OUT_DIR / "metadata_dolphin.json",
+    },
+    "octopus": {
+        "faiss": OUT_DIR / "index_octopus.faiss",
+        "meta": OUT_DIR / "metadata_octopus.json",
+    },
+    "penguin": {
+        "faiss": OUT_DIR / "index_penguin.faiss",
+        "meta": OUT_DIR / "metadata_penguin.json",
+    },
 }
 
 
@@ -127,12 +151,12 @@ TASK_ROUTER_PROMPT = """
 - 人與人互動建議
 
 2. marketing_copy
-- 行銷文案
+- 行銷內容生成
 - 廣告語
 - slogan
 - CTA
-- 想打中特定人格 / 特定受眾
-- 讓內容更吸引某種人
+- 幫我寫文案
+- 幫我寫廣告
 
 3. strategy_advice
 - 行銷策略
@@ -142,15 +166,16 @@ TASK_ROUTER_PROMPT = """
 - 溝通策略
 - 方案規劃
 - 怎麼設計一個更有效的做法
-- 不只是寫文案，而是要想整體方向
+- 怎麼讓某類人產生信任 / 好感 / 參與
+- 不只是寫內容，而是要想整體方向
 
 4. other
 - 其他無關問題
 
 判斷規則：
 - 如果在問「我跟某人怎麼相處 / 為什麼會這樣 / 我該怎麼辦」→ interpersonal_chat
-- 如果在問「幫我寫廣告 / 文案 / slogan / CTA / 打中某種人格」→ marketing_copy
-- 如果在問「幫我想策略 / 活動 / 企劃 / 怎麼設計方案 / 怎麼做比較有效」→ strategy_advice
+- 如果在問「幫我寫廣告 / 文案 / slogan / CTA」→ marketing_copy
+- 如果在問「幫我想策略 / 怎麼做 / 怎麼設計 / 怎麼讓某類人」→ strategy_advice
 - 其他 → other
 
 只輸出以下其中一個字：
@@ -415,8 +440,7 @@ MARKETING_PARSER_PROMPT = """
 從使用者的行銷需求中推測：
 1. product（產品）
 2. persona（人格傾向）
-3. copy_type（文案類型）
-4. tone（語氣）
+3. tone（語氣）
 
 【人格定義（語意理解）】
 
@@ -453,7 +477,6 @@ octopus（章魚）
 {
   "product": "...",
   "persona": "dolphin / tiger / bee / penguin / octopus / general",
-  "copy_type": "...",
   "tone": "..."
 }
 """.strip()
@@ -632,10 +655,10 @@ PERSONA_STRATEGY_MAP = {
 
 
 L5_MARKETING_PROMPT = """
-你是一個頂級行銷文案專家。
+你是一個人格導向的行銷策略顧問與文案專家。
 
 你的任務是：
-根據產品、目標人格與語氣需求，生成「真的會打動這種人」的文案。
+先用顧問語氣說明「怎麼打動這種人」，再自然銜接到文案。
 
 【產品】
 {product}
@@ -643,43 +666,119 @@ L5_MARKETING_PROMPT = """
 【目標人格】
 {persona}
 
-【人格語言規則】
+【人格約束模板】
 {persona_style}
-
-【文案類型】
-{copy_type}
 
 【語氣】
 {tone}
 
-【嚴格要求】
-1. 禁止 generic 廣告句
-   例如：
-   - 變成更好的自己
-   - 燃燒你的熱情
-   - 開啟你的旅程
-   - 實現夢想
-2. 必須有畫面感或情境感
-3. 必須像在對這種人說話，而不是對所有人說
-4. 文案要能看出人格差異，不可千篇一律
-5. 如果是海豚型，必須有陪伴感、情緒流動、互動感
-6. 如果是老虎型，必須更直接、更有推進感、更重結果
-7. 如果是蜜蜂型，必須更有秩序感、清楚感與可靠感
-8. 如果是企鵝型，必須更溫和、更有安全感、更像被照顧
-9. 如果是章魚型，必須更有空間感、自由感與選擇感
+【核心要求】
+- 文案必須符合該人格的核心驅動與決策邏輯
+- 要讓人理解「這段文案為什麼這樣寫」
+- 避免空泛與 generic 廣告語
+- 不得混入其他人格語氣
 
-【輸出格式】
-主標題：
-核心文案：
-CTA：
-""".strip()
+--------------------------------
+
+【人格表達方式（關鍵）】
+
+文案的呈現方式必須依照人格調整：
+
+dolphin（情感 / 互動）
+→ 強調人與人互動、回應、共鳴
+→ 讓人感覺「我在裡面」
+
+tiger（結果 / 行動）
+→ 強調成果、效率、優勢、推進感
+→ 語氣直接、有力，少鋪陳
+
+bee（規則 / 信任）
+→ 強調流程、可靠性、清楚資訊
+→ 語氣穩定、有邏輯
+
+penguin（穩定 / 陪伴）
+→ 強調安心感、長期關係
+→ 有互動但不能強烈或壓迫
+
+octopus（彈性 / 多元）
+→ 呈現多選擇、多觀點
+→ 避免單一強推
+
+不要使用同一種文案套路套所有人格
+
+--------------------------------
+
+【輸出方式】
+
+整體請寫成「一段自然流動的內容」，不要顯示段落名稱或結構提示。
+
+內容順序如下（但不要標示出來）：
+
+1. 開頭用顧問語氣說明：
+   - 如果想打動這種人，應該怎麼做
+   - 可以自然補一句「不要怎麼做」（避免踩雷）
+
+   使用這種句型：
+   - 如果你想打動這種人，你要…
+   - 想讓他們願意行動，關鍵在於…
+   - 重點不是…而是…
+
+   注意：
+   - 不要解釋人格
+   - 不要說「某某人格的人」
+
+2. 接一個自然轉場句，銜接到文案，例如：
+   - 我幫你整理成一段可以直接用的文案
+   - 接下來這段可以直接使用
+
+   （保持簡單，不要搶戲）
+
+3. 接續完整行銷文案：
+
+   文案需包含：
+   - 一個有力的開頭（hook）
+   - 中段推進（情境 / 成果 / 價值）
+   - 自然收斂（CTA）
+
+   長度要求：
+   - 根據使用者需求自動調整
+   - 可以是短文案，也可以是約200字貼文
+   - 不要被固定段落限制
+
+--------------------------------
+
+【畫面與內容要求】
+
+文案中必須呈現「符合人格的畫面感」：
+
+- tiger → 突破、成果、成長
+- dolphin → 互動、情緒、群體
+- penguin → 陪伴、穩定、安心
+- bee → 流程、系統、清楚步驟
+- octopus → 選擇、多路徑
+
+但不要強制所有人格用同一種畫面
+
+--------------------------------
+
+【限制】
+
+不要使用：
+- 【人格分析】【策略說明】這類標題
+- 條列式文案
+- 教科書語氣
+- 過度模板化句型
+
+整體要像真實品牌文案，
+讓人看完會想行動
+"""
 
 
 L5_STRATEGY_EXEC_PROMPT = """
-你是一個「人格導向策略顧問」。
+你是一個人格導向策略顧問。
 
-你的任務是：
-根據已知的目標人格、目標對象與策略目標，提出具體且可執行的策略方案。
+你的任務是根據目標人格、目標對象與策略目標，
+提供自然、好讀、可以直接使用的策略建議。
 
 【目標對象】
 {target_object}
@@ -690,36 +789,119 @@ L5_STRATEGY_EXEC_PROMPT = """
 【策略目標】
 {strategy_goal}
 
-【策略語言規則】
+【人格約束模板】
 {persona_style}
 
 【風格】
 {tone}
 
-【要求】
-1. 不要把人格名稱解讀成真實動物或字面物件
-2. 要把人格當成「決策偏好 / 互動偏好」來理解
-3. 要提供可直接討論或執行的做法
-4. 不要只給一句文案，要給策略
-5. 可以包含活動設計、內容方向、互動機制、轉換路徑、溝通切角
+【核心要求】
+- 必須以人格的核心驅動、抗拒點、說服切入點為基礎
+- 不得變成人格教科書解釋
+- 必須讓人理解「為什麼這樣設計有效」
+- 必須提供可執行做法
 
-【輸出格式】
-請使用：
+【回答格式（必須遵守順序）】
 
-【策略核心】
-...
+請使用 Markdown 標題（###）來組織內容
 
-【對象心理】
-...
+順序必須是：
 
-【具體做法】
-1.
-2.
-3.
+1️⃣ 人格洞察（人會怎麼想）
+2️⃣ 策略推導（應該怎麼做） ← 🔥 必須出現在這裡
+3️⃣ 執行注意事項
+4️⃣ 避雷
+5️⃣ 具體做法 / 活動
+6️⃣ 對外說法
 
-【加分建議】
-...
-""".strip()
+--------------------------------
+
+【每一段要怎麼寫】
+
+### 人格洞察（第一段）
+- 不要解釋人格
+- 要像在講一種「人的反應」
+
+使用這種語氣：
+- 這種人其實更在意的是…
+- 對他們來說，關鍵不是…而是…
+- 他們通常會被…吸引
+
+--------------------------------
+
+### 策略推導（第二段，🔥關鍵）
+這一段一定要做：
+
+👉 從人格 → 推導出「整體應該怎麼設計」
+
+必須做到：
+- 把人性轉成策略方向
+- 說清楚「你應該用什麼方式做整體設計」
+- 不要講細節（那是後面才講）
+
+語氣像：
+- 既然他們在意的是…那整體設計就要…
+- 換句話說，你不是在做…而是在做…
+- 所以整場應該走的是…而不是…
+
+--------------------------------
+
+### 執行注意事項
+- 說「過程中要注意什麼」
+- 偏控制節奏 / 感受 / 流程
+
+--------------------------------
+
+### 避雷
+- 說「什麼會讓他們直接退出」
+- 要具體、有畫面
+
+--------------------------------
+
+### 具體做法 / 活動
+- 3~5個
+- 一看就懂（桌遊、聚餐、說明會形式等）
+- 這一段一定在策略推導後面
+
+--------------------------------
+
+### 對外說法
+- 2~4句
+- 可直接拿去用（像宣傳文案）
+
+--------------------------------
+
+【風格限制】
+
+不要使用：
+- 【心理分析】【策略重點】這種標題
+- 「某某人格的人通常會」
+- 「首先、其次、再者」
+- 分隔線
+- 教科書語氣
+
+可以：
+- 用自然標題（像人在整理）
+- 有少量條列（但不要整篇條列）
+
+--------------------------------
+
+【最重要】
+
+👉 結構一定是：
+
+人格洞察
+→ 策略推導（🔥一定要有）
+→ 注意
+→ 避雷
+→ 做法
+→ 說法
+
+順序不能錯
+
+整體要像一個有經驗的人在幫你「想怎麼做」
+而不是在分析
+"""
 
 
 # =========================================================
@@ -790,6 +972,7 @@ def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
             chunk.get("source_file")
             or chunk.get("file")
             or chunk.get("filename")
+            or chunk.get("source")
             or chunk.get("persona")
             or "unknown"
         ).strip()
@@ -798,6 +981,7 @@ def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
             chunk.get("h2_title")
             or chunk.get("title")
             or chunk.get("section")
+            or chunk.get("section_title")
             or chunk.get("topic")
             or ""
         ).strip()
@@ -814,6 +998,7 @@ def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
 
         return {
             "id": chunk.get("id", f"chunk_{idx}" if idx >= 0 else "chunk"),
+            "persona": str(chunk.get("persona", "")).strip(),
             "source_file": source_file,
             "h2_title": h2_title,
             "text": text_str,
@@ -823,6 +1008,7 @@ def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
     if isinstance(chunk, str):
         return {
             "id": f"chunk_{idx}" if idx >= 0 else "chunk",
+            "persona": "",
             "source_file": "unknown",
             "h2_title": "",
             "text": chunk.strip(),
@@ -831,6 +1017,7 @@ def normalize_chunk(chunk: Any, idx: int = -1) -> Dict[str, Any]:
 
     return {
         "id": f"chunk_{idx}" if idx >= 0 else "chunk",
+        "persona": "",
         "source_file": "unknown",
         "h2_title": "",
         "text": str(chunk).strip(),
@@ -855,24 +1042,31 @@ def get_chunk_title(chunk: Any) -> str:
 # RAG
 # =========================================================
 
-def load_index_and_chunks():
-    if not FAISS_FILE.exists() or not META_FILE.exists():
+def load_index_and_chunks(index_key: str = "all"):
+    if index_key not in INDEX_META_MAP:
+        raise ValueError(f"未知的 index_key: {index_key}")
+
+    faiss_file = INDEX_META_MAP[index_key]["faiss"]
+    meta_file = INDEX_META_MAP[index_key]["meta"]
+
+    if not faiss_file.exists() or not meta_file.exists():
         raise FileNotFoundError(
-            f"找不到 RAG 檔案：\n{FAISS_FILE}\n{META_FILE}"
+            f"找不到 RAG 檔案：\n{faiss_file}\n{meta_file}"
         )
 
-    index = faiss.read_index(str(FAISS_FILE))
+    index = faiss.read_index(str(faiss_file))
 
-    with open(META_FILE, "r", encoding="utf-8") as f:
+    with open(meta_file, "r", encoding="utf-8") as f:
         metadata = json.load(f)
 
     if not isinstance(metadata, list):
-        raise ValueError("metadata.json 格式錯誤：必須是 list")
+        raise ValueError(f"{meta_file.name} 格式錯誤：必須是 list")
 
     chunks = []
     for i, item in enumerate(metadata):
         chunks.append({
             "id": item.get("id", f"chunk_{i}"),
+            "persona": str(item.get("persona", "")).strip(),
             "source_file": str(item.get("source", "")).strip(),
             "h2_title": str(item.get("section_title", "")).strip(),
             "text": str(item.get("text", "")).strip(),
@@ -881,10 +1075,18 @@ def load_index_and_chunks():
 
     if index.ntotal != len(chunks):
         raise ValueError(
-            f"FAISS 向量數量 ({index.ntotal}) 與 metadata 數量 ({len(chunks)}) 不一致，請重新 build_index.py"
+            f"FAISS 向量數量 ({index.ntotal}) 與 metadata 數量 ({len(chunks)}) 不一致，請重新 build_persona_indexes.py"
         )
 
     return index, chunks
+
+
+def load_all_indexes():
+    stores = {}
+    for key in INDEX_META_MAP.keys():
+        stores[key] = load_index_and_chunks(key)
+    return stores
+
 
 def retrieve_rag_context(
     query_text: str,
@@ -902,7 +1104,7 @@ def retrieve_rag_context(
         )
 
     retrieval_query = (
-        f"人際衝突 溝通 協調 建議 做法 行銷文案 廣告 CTA 策略 受眾 {query_text} "
+        f"人際衝突 溝通 協調 建議 做法 行銷文案 廣告 行動建議 策略 受眾 {query_text} "
         + " ".join(persona_hint_parts)
     )
 
@@ -911,7 +1113,7 @@ def retrieve_rag_context(
         normalize_embeddings=True
     ).astype("float32")
 
-    D, I = index.search(q_emb, max(top_k * 3, top_k))
+    D, I = index.search(q_emb, top_k)
 
     results = []
     for rank, idx in enumerate(I[0], start=1):
@@ -919,23 +1121,15 @@ def retrieve_rag_context(
             continue
 
         c = chunks[idx]
-
-        if target_persona:
-            source_file = str(c.get("source_file", "")).lower()
-            if target_persona.lower() not in source_file:
-                continue
-
         results.append({
-            "rank": len(results) + 1,
+            "rank": rank,
             "score": float(D[0][rank - 1]),
             "source": get_chunk_title(c),
             "text": get_chunk_text(c),
         })
 
-        if len(results) >= top_k:
-            break
-
     return results
+
 
 def build_rag_text(retrieved: List[Dict[str, Any]]) -> str:
     if not retrieved:
@@ -946,6 +1140,18 @@ def build_rag_text(retrieved: List[Dict[str, Any]]) -> str:
             f"[{r['rank']}] {r['source']} | score={r['score']:.4f}\n{r['text']}"
         )
     return "\n\n---\n\n".join(blocks)
+
+
+def build_strategy_focused_rag_text(retrieved: List[Dict[str, Any]]) -> str:
+    if not retrieved:
+        return "(no rag context)"
+    prefix = (
+        "請優先從以下人格知識中整理：\n"
+        "1. 核心驅動動機\n"
+        "2. 抗拒點\n"
+        "3. 有效說服策略\n\n"
+    )
+    return prefix + build_rag_text(retrieved)
 
 
 # =========================================================
@@ -994,14 +1200,12 @@ def parse_marketing_input(client: OpenAI, user_input: str) -> Dict[str, Any]:
         return {
             "product": parsed.get("product", user_input),
             "persona": persona,
-            "copy_type": parsed.get("copy_type", "ad"),
             "tone": parsed.get("tone", "normal"),
         }
     except Exception:
         return {
             "product": user_input,
             "persona": "general",
-            "copy_type": "ad",
             "tone": "normal",
         }
 
@@ -1216,7 +1420,6 @@ def run_l5_marketing(client: OpenAI, parsed: Dict[str, Any], rag_text: str = "")
         product=parsed.get("product", ""),
         persona=persona,
         persona_style=persona_style,
-        copy_type=parsed.get("copy_type", "ad"),
         tone=parsed.get("tone", "normal"),
     )
 
@@ -1261,7 +1464,7 @@ def run_l5_strategy(client: OpenAI, parsed: Dict[str, Any], rag_text: str) -> st
 
     resp = client.chat.completions.create(
         model=L5_MODEL,
-        temperature=0.7,
+        temperature=0.5,
         messages=[
             {"role": "system", "content": "你是人格導向策略顧問。"},
             {"role": "user", "content": full_prompt},
@@ -1353,7 +1556,7 @@ def run_interpersonal_pipeline(client: OpenAI, emb_model, index, chunks, user_in
     return result
 
 
-def run_marketing_pipeline(client: OpenAI, emb_model, index, chunks, user_input: str) -> Dict[str, Any]:
+def run_marketing_pipeline(client: OpenAI, emb_model, rag_stores, user_input: str) -> Dict[str, Any]:
     result = {
         "mode": "marketing_copy",
         "input": user_input,
@@ -1367,7 +1570,6 @@ def run_marketing_pipeline(client: OpenAI, emb_model, index, chunks, user_input:
 
     persona = parsed.get("persona", "general")
     product = parsed.get("product", "")
-    copy_type = parsed.get("copy_type", "")
     tone = parsed.get("tone", "")
 
     persona_summaries = []
@@ -1379,7 +1581,10 @@ def run_marketing_pipeline(client: OpenAI, emb_model, index, chunks, user_input:
             "pain_point": f"不符合{persona}型偏好的文案風格",
         })
 
-    retrieval_query = f"{product} {copy_type} {tone} {persona}"
+    retrieval_query = f"{product} {tone} {persona}"
+
+    store_key = persona if persona in {"bee", "tiger", "dolphin", "octopus", "penguin"} else "all"
+    index, chunks = rag_stores[store_key]
 
     rag_results = retrieve_rag_context(
         query_text=retrieval_query,
@@ -1388,17 +1593,16 @@ def run_marketing_pipeline(client: OpenAI, emb_model, index, chunks, user_input:
         chunks=chunks,
         emb_model=emb_model,
         top_k=TOP_K_RAG,
-        target_persona=persona if persona != "general" else ""
     )
     result["rag"] = rag_results
-    rag_text = build_rag_text(rag_results)
+    rag_text = build_strategy_focused_rag_text(rag_results)
 
     answer = run_l5_marketing(client, parsed, rag_text)
     result["l5_answer"] = answer
     return result
 
 
-def run_strategy_pipeline(client: OpenAI, emb_model, index, chunks, user_input: str) -> Dict[str, Any]:
+def run_strategy_pipeline(client: OpenAI, emb_model, rag_stores, user_input: str) -> Dict[str, Any]:
     result = {
         "mode": "strategy_advice",
         "input": user_input,
@@ -1425,6 +1629,9 @@ def run_strategy_pipeline(client: OpenAI, emb_model, index, chunks, user_input: 
 
     retrieval_query = f"{target_object} {strategy_goal} {persona}"
 
+    store_key = persona if persona in {"bee", "tiger", "dolphin", "octopus", "penguin"} else "all"
+    index, chunks = rag_stores[store_key]
+
     rag_results = retrieve_rag_context(
         query_text=retrieval_query,
         persona_summaries=persona_summaries,
@@ -1432,27 +1639,27 @@ def run_strategy_pipeline(client: OpenAI, emb_model, index, chunks, user_input: 
         chunks=chunks,
         emb_model=emb_model,
         top_k=TOP_K_RAG,
-        target_persona=persona if persona != "general" else ""
     )
     result["rag"] = rag_results
-    rag_text = build_rag_text(rag_results)
+    rag_text = build_strategy_focused_rag_text(rag_results)
 
     answer = run_l5_strategy(client, parsed, rag_text)
     result["l5_answer"] = answer
     return result
 
 
-def process_query(client: OpenAI, emb_model, index, chunks, user_input: str) -> Dict[str, Any]:
+def process_query(client: OpenAI, emb_model, rag_stores, user_input: str) -> Dict[str, Any]:
     task = route_task(client, user_input)
 
     if task == "interpersonal_chat":
+        index, chunks = rag_stores["all"]
         return run_interpersonal_pipeline(client, emb_model, index, chunks, user_input)
 
     if task == "marketing_copy":
-        return run_marketing_pipeline(client, emb_model, index, chunks, user_input)
+        return run_marketing_pipeline(client, emb_model, rag_stores, user_input)
 
     if task == "strategy_advice":
-        return run_strategy_pipeline(client, emb_model, index, chunks, user_input)
+        return run_strategy_pipeline(client, emb_model, rag_stores, user_input)
 
     return {
         "mode": "other",
@@ -1565,7 +1772,7 @@ def main():
 
     client = OpenAI(api_key=api_key)
     emb_model = SentenceTransformer(EMB_MODEL)
-    index, chunks = load_index_and_chunks()
+    rag_stores = load_all_indexes()
 
     print("Persona Engine Final v3 ready.")
     print("Modes: interpersonal_chat / marketing_copy / strategy_advice / other")
@@ -1579,7 +1786,7 @@ def main():
             break
 
         try:
-            result = process_query(client, emb_model, index, chunks, user_input)
+            result = process_query(client, emb_model, rag_stores, user_input)
             print_debug(result)
         except Exception as e:
             print(f"\n[ERROR] {e}\n")
