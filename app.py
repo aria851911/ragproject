@@ -49,6 +49,25 @@ def add_ai(msg: str, mode: str):
 
 
 # =========================================================
+# Helper
+# =========================================================
+
+def render_mode_badge(mode: str) -> None:
+    mode_map = {
+        "marketing_copy": "### 📣 行銷文案",
+        "strategy_advice": "### 🧠 人格洞察",
+        "interpersonal_chat": "### 🤝 人際分析",
+        "other": "### 💬 回覆",
+        "error": "### ⚠️ 系統提示",
+        "invalid_input": "### ⚠️ 輸入提醒",
+    }
+
+    label = mode_map.get(mode, "")
+    if label:
+        st.markdown(label)
+
+
+# =========================================================
 # UI
 # =========================================================
 
@@ -58,7 +77,11 @@ st.title("🧠 人格互動顧問")
 # 顯示歷史訊息
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.write(m["content"])
+        if m["role"] == "assistant":
+            render_mode_badge(m.get("mode", ""))
+            st.markdown(m["content"])
+        else:
+            st.markdown(m["content"])
 
 
 # 輸入框
@@ -75,7 +98,7 @@ if user_input and user_input.strip():
     add_user(text)
 
     with st.chat_message("user"):
-        st.write(text)
+        st.markdown(text)
 
     with st.chat_message("assistant"):
         with st.spinner("思考中..."):
@@ -87,13 +110,15 @@ if user_input and user_input.strip():
                     rag_stores=rag_stores,
                 )
 
-                answer = result.get("answer", "")
-                mode = result.get("mode", "")
+                answer = result.get("answer", "").strip()
+                mode = result.get("mode", "").strip()
 
-                st.write(answer)
+                render_mode_badge(mode)
+                st.markdown(answer)
                 add_ai(answer, mode)
 
             except Exception as e:
-                err = f"系統錯誤：{e}"
-                st.error(err)
+                err = f"系統目前發生問題：{e}"
+                render_mode_badge("error")
+                st.warning(err)
                 add_ai(err, "error")
